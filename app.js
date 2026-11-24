@@ -213,9 +213,10 @@ if (typeof document !== "undefined") {
     return added;
   }
 
+  let loadingMovies = false;
   async function loadMovies(count) {
-    if (loadingMore) return 0;
-    loadingMore = true;
+    if (loadingMovies) return 0;
+    loadingMovies = true;
     let added = 0;
     try {
       for (let i = 0; i < count; i++) {
@@ -226,7 +227,7 @@ if (typeof document !== "undefined") {
         added += moviePool.length - before;
         if (!data.results || !data.results.length) break;
       }
-    } finally { loadingMore = false; }
+    } finally { loadingMovies = false; }
     return added;
   }
 
@@ -299,7 +300,8 @@ if (typeof document !== "undefined") {
   }
 
   function maybeRefill() {
-    if (deck.length < 12 && !loadingMore) {
+    const busy = media === "movies" ? loadingMovies : loadingMore;
+    if (deck.length < 12 && !busy) {
       const loader = media === "movies" ? loadMovies(2) : loadMorePages(2);
       loader.then(() => {
         const fresh = deckFromPool(currentPool(), excludedIds(), genre).filter(s => !deck.some(d => keyOf(d) === keyOf(s)));
@@ -386,31 +388,42 @@ if (typeof document !== "undefined") {
     const box = $("search-results");
     if (!q) return;
     box.innerHTML = '<div class="empty">Searching…</div>';
-    try {
-      const data = await fetchJson(API + "/search/shows?q=" + encodeURIComponent(q));
-      const shows = dedupeById(data.map(x => x.show).filter(s => s && s.id));
+    const boost = list => {
+      const ql = q.toLowerCase();
+      const score = n => { const s = (n || "").toLowerCase(); return s === ql ? 0 : s.startsWith(ql) ? 1 : s.includes(ql) ? 2 : 3; };
+      return list.map((x, i) => [score(x.name), i, x]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(t => t[2]);
+    };
+    const [tvRes, tmRes] = await Promise.allSettled([
+      fetchJson(API + "/search/shows?q=" + encodeURIComponent(q)),
+      fetchJson(TMDB + "/search/movie?api_key=" + TMDB_KEY + "&include_adult=false&query=" + encodeURIComponent(q))
+    ]);
+    let shows = [], movies = [];
+    if (tvRes.status === "fulfilled") {
+      shows = dedupeById(tvRes.value.map(x => x.show).filter(s => s && s.id));
       shows.forEach(s => { s.key = "tv:" + s.id; s._media = "show"; });
-      let movies = [];
-      try {
-        const md = await fetchJson(TMDB + "/search/movie?api_key=" + TMDB_KEY + "&include_adult=false&query=" + encodeURIComponent(q));
-        movies = (md.results || []).map(normalizeTmdbMovie).filter(Boolean);
-      } catch (e) { /* movie results are a bonus; show results still stand */ }
-      if (!shows.length && !movies.length) { box.innerHTML = '<div class="empty">Nothing found for that search.<br>Check the spelling and try again.</div>'; return; }
-      box.innerHTML = "";
-      if (shows.length) {
-        const h = document.createElement("div");
-        h.className = "group-title"; h.textContent = "📺 Shows";
-        box.appendChild(h);
-        shows.forEach(show => box.appendChild(searchRow(show)));
-      }
-      if (movies.length) {
-        const h = document.createElement("div");
-        h.className = "group-title"; h.textContent = "🎬 Movies";
-        box.appendChild(h);
-        movies.forEach(mv => box.appendChild(searchRow(mv)));
-      }
-    } catch (err) {
-      box.innerHTML = '<div class="empty">Search could not reach the databases just now.<br>Check your connection and try again.</div>';
+      shows = boost(shows);
+    }
+    if (tmRes.status === "fulfilled") {
+      movies = boost((tmRes.value.results || []).map(normalizeTmdbMovie).filter(Boolean));
+    }
+    if (!shows.length && !movies.length) {
+      box.innerHTML = tvRes.status === "rejected" && tmRes.status === "rejected"
+        ? '<div class="empty">Search could not reach the databases just now.<br>Check your connection and try again.</div>'
+        : '<div class="empty">Nothing found for that search.<br>Check the spelling and try again.</div>';
+      return;
+    }
+    box.innerHTML = "";
+    if (shows.length) {
+      const h = document.createElement("div");
+      h.className = "group-title"; h.textContent = "📺 Shows";
+      box.appendChild(h);
+      shows.forEach(show => box.appendChild(searchRow(show)));
+    }
+    if (movies.length) {
+      const h = document.createElement("div");
+      h.className = "group-title"; h.textContent = "🎬 Movies";
+      box.appendChild(h);
+      movies.forEach(mv => box.appendChild(searchRow(mv)));
     }
   });
 
@@ -441,7 +454,7 @@ if (typeof document !== "undefined") {
 
   /* ---------- my list ---------- */
   const GROUPS = [
-    { key: "watching", title: "📺 Watching" },
+    { key: "watching", title: "👀 Watching" },
     { key: "want", title: "🔖 Want to watch" },
     { key: "finished", title: "✅ Finished" }
   ];
@@ -546,10 +559,10 @@ if (typeof document !== "undefined") {
     $("media-movies").classList.toggle("active", m === "movies");
     if (m === "movies" && !moviesLoaded) {
       deck = [];
-      renderDeck();
+      deckEl.innerHTML = "";
+      deckActions.style.display = "none";
       deckMsg.style.display = "block";
       deckMsg.textContent = "Loading movies…";
-      deckActions.style.display = "none";
       try {
         await loadMovies(3);
         moviesLoaded = true;
