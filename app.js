@@ -212,7 +212,7 @@ if (typeof document !== "undefined") {
       '<div class="meta">' + (r !== null ? '<span class="star">★ ' + r.toFixed(1) + "</span>" : "") + "<span>" + meta + "</span></div>" +
       '<div class="genres">' + (show.genres || []).join(" · ") + "</div>" +
       '<p class="story"></p></div>';
-    el.querySelector("img.poster").src = (show.image && (show.image.original || show.image.medium)) || "";
+    el.querySelector("img.poster").src = (show.image && (behind ? show.image.medium : (show.image.original || show.image.medium))) || "";
     el.querySelector("h2").textContent = show.name;
     el.querySelector(".story").textContent = storyline(show);
     return el;
@@ -480,11 +480,17 @@ if (typeof document !== "undefined") {
   persistSaved();
   (async () => {
     try {
-      await loadMorePages(3);
+      await loadMorePages(1);
       buildChips();
       deck = deckFromPool(pool, excludedIds(), genre);
       renderDeck();
-      maybeRefill();
+      // Widen the pool in the background so genre filters and refills have more to draw on.
+      loadMorePages(2).then(() => {
+        buildChips();
+        const fresh = deckFromPool(pool, excludedIds(), genre).filter(s => !deck.some(d => d.id === s.id));
+        deck = deck.concat(fresh.slice(0, 60));
+        if (deck.length && deckEl.querySelectorAll(".card").length === 0) renderDeck();
+      }).catch(() => { /* background widening is best-effort */ });
     } catch (err) {
       deckMsg.innerHTML = 'Could not load shows from TVMaze.<br>Check your connection, then reload this page.';
     }
