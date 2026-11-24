@@ -1,6 +1,6 @@
 /* Show Picker service worker — caches this site's own files only.
    TVMaze data and posters are cross-origin and always come from the network. */
-const CACHE = "show-picker-v2";
+const CACHE = "show-picker-v3";
 const ASSETS = [
   "./",
   "./index.html",

@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Show Picker — swipe through shows, never lose your episode</title>
-<meta name="description" content="Swipe through TV shows with real posters and storylines, save the ones you like, and track exactly which season and episode you stopped at. Free, private, runs in your browser.">
+<meta name="description" content="Swipe through TV shows and movies with real posters and storylines, save the ones you like, and track exactly which season and episode you stopped at. Free, private, runs in your browser.">
 <meta name="theme-color" content="#0e0e15">
 <meta property="og:title" content="Show Picker">
-<meta property="og:description" content="Swipe through shows, save your favourites, and always know where you stopped — season and episode.">
+<meta property="og:description" content="Swipe through shows and movies, save your favourites, and always know where you stopped — season and episode.">
 <meta property="og:image" content="banner.png">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -30,6 +30,9 @@
   nav.tabs button{flex:1;max-width:170px;padding:11px 6px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:15px;font-weight:600;cursor:pointer;}
   nav.tabs button.active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);}
   nav.tabs .count{display:inline-block;min-width:20px;padding:0 5px;border-radius:999px;background:rgba(0,0,0,.18);font-size:12.5px;margin-left:4px;}
+  .mediatoggle{display:flex;gap:8px;justify-content:center;margin:12px 0 2px;}
+  .mediatoggle button{padding:8px 20px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:14.5px;font-weight:700;cursor:pointer;}
+  .mediatoggle button.active{background:var(--surface2);color:var(--accent);border-color:var(--accent);}
   section.view{display:none;}
   section.view.active{display:block;}
   /* genre chips */
@@ -112,6 +115,10 @@
 
   <!-- PICK -->
   <section class="view active" id="view-pick">
+    <div class="mediatoggle">
+      <button id="media-shows" class="active" type="button">📺 Shows</button>
+      <button id="media-movies" type="button">🎬 Movies</button>
+    </div>
     <div class="chips" id="genre-chips"></div>
     <div class="deck" id="deck">
       <div class="deck-msg" id="deck-msg">Loading shows…</div>
@@ -127,7 +134,7 @@
   <!-- SEARCH -->
   <section class="view" id="view-search">
     <form class="searchbar" id="search-form">
-      <input id="search-input" type="search" placeholder="Search any show… e.g. Breaking Bad" autocomplete="off">
+      <input id="search-input" type="search" placeholder="Search any show or movie… e.g. Breaking Bad" autocomplete="off">
       <button type="submit">Search</button>
     </form>
     <div class="results" id="search-results">
@@ -141,11 +148,11 @@
   </section>
 
   <div class="note">
-    <b>How it works:</b> posters and storylines come live from <b>TVMaze</b>, a free TV database — no account, no key, nothing made up. Your list and your episode progress live only in this browser (like Bet Diary), so they stay on this device. <b>Shows only for now</b> — movies live in a different database and can be added later if you want them.
+    <b>How it works:</b> show posters and storylines come live from <b>TVMaze</b>, a free TV database, and movies come from <b>TMDB</b> — real data, nothing made up. Your list and your episode progress live only in this browser (like Bet Diary), so they stay on this device.
   </div>
 
   <footer class="foot">
-    Data &amp; posters: <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVMaze</a> · Your list never leaves this device.
+    Data &amp; posters: <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVMaze</a> (shows) · <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a> (movies). This product uses the TMDB API but is not endorsed or certified by TMDB. · Your list never leaves this device.
   </footer>
 </div>
 
