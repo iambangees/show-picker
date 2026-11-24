@@ -61,9 +61,13 @@ function shuffle(arr, rnd) {
   return a;
 }
 
+function keyOf(show) {
+  return show && show.key ? show.key : "tv:" + (show && show.id);
+}
+
 function deckFromPool(pool, excludedIds, genre, rnd) {
   const ex = excludedIds || new Set();
-  let c = (pool || []).filter(s => isEligible(s) && !ex.has(s.id));
+  let c = (pool || []).filter(s => isEligible(s) && !ex.has(keyOf(s)));
   if (genre && genre !== "All") c = c.filter(s => (s.genres || []).indexOf(genre) !== -1);
   c.sort((a, b) => ((b.weight || 0) - (a.weight || 0)) || ((ratingOf(b) || 0) - (ratingOf(a) || 0)));
   return shuffle(c.slice(0, 140), rnd);
@@ -95,13 +99,38 @@ function progressText(entry) {
   if (!entry) return "";
   if (entry.status === "finished") return "Finished ✓";
   if (entry.status === "want") return "Not started yet";
+  if (entry.media === "movie") return "In progress";
   if ((entry.episode || 0) > 0) return "Stopped at S" + entry.season + " · E" + entry.episode;
   return "Season " + entry.season + " · not started yet";
+}
+
+const TMDB_IMG = "https://image.tmdb.org/t/p/";
+const TMDB_GENRES = { 28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Science Fiction", 10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western" };
+
+function normalizeTmdbMovie(m) {
+  if (!m || !m.id || !m.title) return null;
+  return {
+    id: "tm:" + m.id,
+    key: "tm:" + m.id,
+    _media: "movie",
+    name: m.title,
+    image: m.poster_path ? { medium: TMDB_IMG + "w342" + m.poster_path, original: TMDB_IMG + "w780" + m.poster_path } : null,
+    summary: m.overview || "",
+    genres: (m.genre_ids || []).map(g => TMDB_GENRES[g]).filter(Boolean),
+    premiered: m.release_date || "",
+    rating: { average: typeof m.vote_average === "number" && m.vote_average > 0 ? m.vote_average : null },
+    weight: Math.min(100, Math.round(m.popularity || 0)),
+    status: "",
+    network: null,
+    webChannel: null
+  };
 }
 
 function entryFromShow(show, status) {
   return {
     id: show.id,
+    key: keyOf(show),
+    media: show._media || "show",
     name: show.name,
     img: show.image ? show.image.medium : "",
     imgBig: show.image ? (show.image.original || show.image.medium) : "",
@@ -121,6 +150,8 @@ function entryFromShow(show, status) {
 /* ================= browser app ================= */
 if (typeof document !== "undefined") {
   const API = "https://api.tvmaze.com";
+  const TMDB = "https://api.themoviedb.org/3";
+  const TMDB_KEY = "ded2e623b03b83fafb50ffd6545186a6";
   const LS_SAVED = "sp-saved", LS_PASSED = "sp-passed", LS_EPS = "sp-eps";
 
   function load(key, fallback) {
@@ -131,11 +162,16 @@ if (typeof document !== "undefined") {
   }
 
   let saved = load(LS_SAVED, []);
-  let passedIds = new Set(load(LS_PASSED, []));
+  saved.forEach(e => { if (!e.key) { e.key = "tv:" + e.id; e.media = e.media || "show"; } });
+  let passedIds = new Set(load(LS_PASSED, []).map(x => typeof x === "number" ? "tv:" + x : x));
   let epsCache = load(LS_EPS, {});
   const epsFetching = new Set();
 
   let pool = [];
+  let moviePool = [];
+  let media = "shows";
+  let moviePage = 0;
+  let moviesLoaded = false;
   let deck = [];
   let genre = "All";
   let nextPage = 0;
@@ -147,7 +183,8 @@ if (typeof document !== "undefined") {
   const deckEl = $("deck"), deckMsg = $("deck-msg"), deckActions = $("deck-actions");
   const chipsEl = $("genre-chips"), listBody = $("list-body"), listCount = $("list-count");
 
-  function savedIds() { return new Set(saved.map(e => e.id)); }
+  function currentPool() { return media === "movies" ? moviePool : pool; }
+  function savedIds() { return new Set(saved.map(e => e.key || "tv:" + e.id)); }
   function excludedIds() { const s = savedIds(); passedIds.forEach(id => s.add(id)); return s; }
   function persistPassed() { store(LS_PASSED, Array.from(passedIds).slice(-600)); }
   function persistSaved() { store(LS_SAVED, saved); listCount.textContent = saved.length; }
@@ -166,6 +203,7 @@ if (typeof document !== "undefined") {
       for (let i = 0; i < count; i++) {
         const page = await fetchJson(API + "/shows?page=" + nextPage);
         nextPage++;
+        page.forEach(s => { s.key = "tv:" + s.id; s._media = "show"; });
         const before = pool.length;
         pool = dedupeById(pool.concat(page));
         added += pool.length - before;
@@ -175,9 +213,26 @@ if (typeof document !== "undefined") {
     return added;
   }
 
+  async function loadMovies(count) {
+    if (loadingMore) return 0;
+    loadingMore = true;
+    let added = 0;
+    try {
+      for (let i = 0; i < count; i++) {
+        moviePage++;
+        const data = await fetchJson(TMDB + "/discover/movie?api_key=" + TMDB_KEY + "&sort_by=popularity.desc&include_adult=false&page=" + moviePage);
+        const before = moviePool.length;
+        moviePool = dedupeById(moviePool.concat((data.results || []).map(normalizeTmdbMovie).filter(Boolean)));
+        added += moviePool.length - before;
+        if (!data.results || !data.results.length) break;
+      }
+    } finally { loadingMore = false; }
+    return added;
+  }
+
   function buildChips() {
     const counts = {};
-    pool.forEach(s => (s.genres || []).forEach(g => { counts[g] = (counts[g] || 0) + 1; }));
+    currentPool().forEach(s => (s.genres || []).forEach(g => { counts[g] = (counts[g] || 0) + 1; }));
     const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 9);
     chipsEl.innerHTML = "";
     ["All"].concat(top).forEach(g => {
@@ -188,7 +243,7 @@ if (typeof document !== "undefined") {
       b.addEventListener("click", () => {
         genre = g;
         buildChips();
-        deck = deckFromPool(pool, excludedIds(), genre);
+        deck = deckFromPool(currentPool(), excludedIds(), genre);
         renderDeck();
         maybeRefill();
       });
@@ -222,13 +277,14 @@ if (typeof document !== "undefined") {
     deckEl.querySelectorAll(".card").forEach(c => c.remove());
     if (!deck.length) {
       deckMsg.style.display = "block";
-      deckMsg.innerHTML = 'That\'s everything in this pile for now.<br><button type="button" id="btn-more">Load more shows</button>';
+      deckMsg.innerHTML = 'That\'s everything in this pile for now.<br><button type="button" id="btn-more">Load more ' + (media === "movies" ? "movies" : "shows") + "</button>";
       const b = $("btn-more");
       if (b) b.addEventListener("click", async () => {
-        deckMsg.textContent = "Loading more shows…";
-        await loadMorePages(3);
+        deckMsg.textContent = media === "movies" ? "Loading more movies…" : "Loading more shows…";
+        if (media === "movies") { await loadMovies(3); moviesLoaded = true; }
+        else await loadMorePages(3);
         buildChips();
-        deck = deckFromPool(pool, excludedIds(), genre);
+        deck = deckFromPool(currentPool(), excludedIds(), genre);
         renderDeck();
       });
       deckActions.style.display = "none";
@@ -244,8 +300,9 @@ if (typeof document !== "undefined") {
 
   function maybeRefill() {
     if (deck.length < 12 && !loadingMore) {
-      loadMorePages(2).then(() => {
-        const fresh = deckFromPool(pool, excludedIds(), genre).filter(s => !deck.some(d => d.id === s.id));
+      const loader = media === "movies" ? loadMovies(2) : loadMorePages(2);
+      loader.then(() => {
+        const fresh = deckFromPool(currentPool(), excludedIds(), genre).filter(s => !deck.some(d => keyOf(d) === keyOf(s)));
         deck = deck.concat(fresh.slice(0, 60));
         buildChips();
         if (deck.length && deckEl.querySelectorAll(".card").length === 0) renderDeck();
@@ -260,7 +317,7 @@ if (typeof document !== "undefined") {
       saved.unshift(entryFromShow(show, "want"));
       persistSaved();
     } else {
-      passedIds.add(show.id);
+      passedIds.add(keyOf(show));
       persistPassed();
     }
     lastAction = { type: type, show: show };
@@ -313,8 +370,8 @@ if (typeof document !== "undefined") {
   $("btn-undo").addEventListener("click", () => {
     if (!lastAction) return;
     const { type, show } = lastAction;
-    if (type === "like") { saved = saved.filter(e => e.id !== show.id); persistSaved(); }
-    else { passedIds.delete(show.id); persistPassed(); }
+    if (type === "like") { saved = saved.filter(e => (e.key || "tv:" + e.id) !== keyOf(show)); persistSaved(); }
+    else { passedIds.delete(keyOf(show)); persistPassed(); }
     deck.unshift(show);
     lastAction = null;
     $("btn-undo").disabled = true;
@@ -332,11 +389,28 @@ if (typeof document !== "undefined") {
     try {
       const data = await fetchJson(API + "/search/shows?q=" + encodeURIComponent(q));
       const shows = dedupeById(data.map(x => x.show).filter(s => s && s.id));
-      if (!shows.length) { box.innerHTML = '<div class="empty">No shows found for that search.<br>Check the spelling and try again.</div>'; return; }
+      shows.forEach(s => { s.key = "tv:" + s.id; s._media = "show"; });
+      let movies = [];
+      try {
+        const md = await fetchJson(TMDB + "/search/movie?api_key=" + TMDB_KEY + "&include_adult=false&query=" + encodeURIComponent(q));
+        movies = (md.results || []).map(normalizeTmdbMovie).filter(Boolean);
+      } catch (e) { /* movie results are a bonus; show results still stand */ }
+      if (!shows.length && !movies.length) { box.innerHTML = '<div class="empty">Nothing found for that search.<br>Check the spelling and try again.</div>'; return; }
       box.innerHTML = "";
-      shows.forEach(show => box.appendChild(searchRow(show)));
+      if (shows.length) {
+        const h = document.createElement("div");
+        h.className = "group-title"; h.textContent = "📺 Shows";
+        box.appendChild(h);
+        shows.forEach(show => box.appendChild(searchRow(show)));
+      }
+      if (movies.length) {
+        const h = document.createElement("div");
+        h.className = "group-title"; h.textContent = "🎬 Movies";
+        box.appendChild(h);
+        movies.forEach(mv => box.appendChild(searchRow(mv)));
+      }
     } catch (err) {
-      box.innerHTML = '<div class="empty">Search could not reach TVMaze just now.<br>Check your connection and try again.</div>';
+      box.innerHTML = '<div class="empty">Search could not reach the databases just now.<br>Check your connection and try again.</div>';
     }
   });
 
@@ -344,7 +418,7 @@ if (typeof document !== "undefined") {
     const row = document.createElement("div");
     row.className = "row";
     const r = ratingOf(show);
-    const already = saved.some(e => e.id === show.id);
+    const already = saved.some(e => (e.key || "tv:" + e.id) === keyOf(show));
     row.innerHTML =
       (show.image ? '<img alt="">' : "") +
       '<div class="rinfo"><h3></h3><div class="meta">' +
@@ -395,7 +469,7 @@ if (typeof document !== "undefined") {
       '<div class="rinfo"><h3></h3>' +
       '<div class="meta"><span>' + [entry.year, entry.rating !== null && entry.rating !== undefined ? "★ " + Number(entry.rating).toFixed(1) : "", (entry.genres || []).join(" · ")].filter(Boolean).join(" · ") + "</span></div>" +
       '<div class="statuschips">' + chips + "</div>";
-    if (entry.status === "watching") {
+    if (entry.status === "watching" && entry.media !== "movie") {
       html +=
         '<div class="progress"><span class="lab">Season</span>' +
         '<span class="stepper"><button type="button" data-act="s-">−</button><span class="val">' + entry.season + '</span><button type="button" data-act="s+">+</button></span>' +
@@ -431,7 +505,7 @@ if (typeof document !== "undefined") {
       listBody.appendChild(h);
       items.forEach(entry => {
         listBody.appendChild(listRow(entry));
-        if (entry.status === "watching") ensureEpisodeMap(entry.id);
+        if (entry.status === "watching" && entry.media !== "movie") ensureEpisodeMap(entry.id);
       });
     });
   }
@@ -463,6 +537,37 @@ if (typeof document !== "undefined") {
     renderList();
   });
 
+  /* ---------- media toggle (shows / movies) ---------- */
+  async function switchMedia(m) {
+    if (media === m && (m === "shows" || moviesLoaded)) return;
+    media = m;
+    genre = "All";
+    $("media-shows").classList.toggle("active", m === "shows");
+    $("media-movies").classList.toggle("active", m === "movies");
+    if (m === "movies" && !moviesLoaded) {
+      deck = [];
+      renderDeck();
+      deckMsg.style.display = "block";
+      deckMsg.textContent = "Loading movies…";
+      deckActions.style.display = "none";
+      try {
+        await loadMovies(3);
+        moviesLoaded = true;
+      } catch (err) {
+        deckMsg.innerHTML = 'Movies could not load from TMDB just now.<br><button type="button" id="btn-more">Try again</button>';
+        const b = $("btn-more");
+        if (b) b.addEventListener("click", () => { moviesLoaded = false; media = "shows"; switchMedia("movies"); });
+        return;
+      }
+    }
+    buildChips();
+    deck = deckFromPool(currentPool(), excludedIds(), genre);
+    renderDeck();
+    maybeRefill();
+  }
+  $("media-shows").addEventListener("click", () => switchMedia("shows"));
+  $("media-movies").addEventListener("click", () => switchMedia("movies"));
+
   /* ---------- tabs ---------- */
   function switchView(name) {
     currentView = name;
@@ -487,7 +592,8 @@ if (typeof document !== "undefined") {
       // Widen the pool in the background so genre filters and refills have more to draw on.
       loadMorePages(2).then(() => {
         buildChips();
-        const fresh = deckFromPool(pool, excludedIds(), genre).filter(s => !deck.some(d => d.id === s.id));
+        if (media !== "shows") return;
+        const fresh = deckFromPool(pool, excludedIds(), genre).filter(s => !deck.some(d => keyOf(d) === keyOf(s)));
         deck = deck.concat(fresh.slice(0, 60));
         if (deck.length && deckEl.querySelectorAll(".card").length === 0) renderDeck();
       }).catch(() => { /* background widening is best-effort */ });
@@ -498,5 +604,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stripHtml, truncateWords, storyline, yearOf, ratingOf, isEligible, dedupeById, shuffle, deckFromPool, seasonMap, clampProgress, progressText, entryFromShow };
+  module.exports = { stripHtml, truncateWords, storyline, yearOf, ratingOf, isEligible, dedupeById, shuffle, deckFromPool, seasonMap, clampProgress, progressText, entryFromShow, keyOf, normalizeTmdbMovie, TMDB_GENRES };
 }
